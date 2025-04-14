@@ -1,0 +1,422 @@
+# 1) 'Air Pollution in Seoul' Dataset from KaggleHub
+import kagglehub
+import os
+import pandas as pd
+
+# Download latest version
+# The dataset contains air pollution data form 2017~2019 (3 yeras)
+path = kagglehub.dataset_download("bappekim/air-pollution-in-seoul")
+print("Path to dataset files:", path)
+
+# create the path for the file
+full_path = os.path.join(path,  "AirPollutionSeoul", "Measurement_summary.csv")
+
+df = pd.read_csv(full_path)
+
+
+# 2) Export additional weather data from open-meteo.com
+import requests
+from tqdm import tqdm
+
+# (Open-meteo) STEP 1: Extracing station latitude and longitude
+df["Measurement date"] = pd.to_datetime(df["Measurement date"])
+stations = df[["Station code", "Latitude", "Longitude"]].drop_duplicates()
+
+# (Open-meteo) STEP 2: Selected variables in weather data
+weather_vars = ["temperature_2m", "relative_humidity_2m", "windspeed_10m",
+    "winddirection_10m", "precipitation", "cloudcover", "shortwave_radiation"]
+
+# STEP 3: Data duration (1 year maximum for extracting data in open-meteo)
+year_list = [2017, 2018, 2019]
+
+for x in year_list:
+  if x == 2017:
+    start_date = "2017-01-01"
+    end_date = "2017-12-31"
+    csv_file_name = "weather_2017_by_station.csv"
+
+  elif x == 2018:
+    start_date = "2018-01-01"
+    end_date = "2018-12-31"
+    csv_file_name = "weather_2018_by_station.csv"
+
+  elif x == 2019:
+    start_date = "2019-01-01"
+    end_date = "2019-12-31"
+    csv_file_name = "weather_2019_by_station.csv"
+
+  # STEP 4: Extracting data
+  weather_data = []
+
+  for _, row in tqdm(stations.iterrows(), total=len(stations)):
+      code = row["Station code"]
+      lat = row["Latitude"]
+      lon = row["Longitude"]
+
+      url = (
+          f"https://archive-api.open-meteo.com/v1/archive?"
+          f"latitude={lat}&longitude={lon}"
+          f"&start_date={start_date}&end_date={end_date}"
+          f"&hourly={','.join(weather_vars)}"
+          f"&timezone=Asia%2FSeoul"
+      )
+
+      response = requests.get(url)
+      data = response.json()
+
+      # Saving hourly data from the selected duration
+      df_weather = pd.DataFrame(data["hourly"])
+      df_weather["time"] = pd.to_datetime(df_weather["time"])
+      df_weather["Station code"] = code
+      df_weather["Latitude"] = lat
+      df_weather["Longitude"] = lon
+      weather_data.append(df_weather)
+
+  # Save the extracted data
+  weather_df = pd.concat(weather_data, ignore_index=True)
+  weather_df.rename(columns={"time": "Measurement date"}, inplace=True)
+  weather_df.to_csv(csv_file_name, index=False)
+
+  # Saving the weather_df in the local drive (Download folder)
+  from google.colab import files
+  files.download(csv_file_name)
+
+
+
+
+
+# Upload the weather datasets from open-meteo.com and KaggleHub to Google Drive
+# open-meteo dataset: weather_2017 ~ 2019_by_station.csv /
+# Kagglehub: Measurement_summary.csv
+
+import pandas as pd
+import os
+from google.colab import drive
+drive.mount('/content/drive')
+
+# File path in google drive
+folder_path = "/content/drive/MyDrive/data_science/air_pollution_data"
+
+# Extracted weather data files in google drive
+files = [
+    "weather_2017_by_station.csv",
+    "weather_2018_by_station.csv",
+    "weather_2019_by_station.csv"]
+
+# Read files and svae a list
+# Merge all year data into a dataset
+dfs = []
+
+for file in files:
+    path = os.path.join(folder_path, file)
+    df = pd.read_csv(path)
+    df["Measurement date"] = pd.to_datetime(df["Measurement date"])
+    dfs.append(df)
+
+merged_df = pd.concat(dfs, ignore_index=True)
+
+# Arrange the dataset: Station code → Measurement date
+merged_df.sort_values(by=["Station code", "Measurement date"], inplace=True)
+
+# save the merged dataset
+output_path = os.path.join(folder_path, "weather_2017_2019_by_station_merged.csv")
+merged_df.to_csv(output_path, index=False)
+
+print(output_path)
+
+# Saving the weather_df in the local drive (Download folder)
+from google.colab import files
+files.download(output_path)
+
+
+
+import matplotlib.pyplot as plt
+
+folder_path = "/content/drive/MyDrive/data_science/air_pollution_data"
+path = os.path.join(folder_path, "Measurement_summary.csv")
+df = pd.read_csv(path)
+
+# Datetime format of the seleted column in the dataset
+df["Measurement date"] = pd.to_datetime(df["Measurement date"])
+df.set_index("Measurement date", inplace=True)
+
+# Resampling (daily average)
+daily_pm25 = df["PM2.5"].resample("D").mean()
+hourly_pm25 = df["PM2.5"]
+
+# Visualization (Trend, seasonal analysis)
+daily_pm25.plot(figsize=(12, 4), title="Daily PM2.5 Level")
+plt.xlabel("Date")
+plt.ylabel("PM2.5")
+plt.grid(True)
+plt.show()
+
+
+
+
+## Remove outlier and show interactive plot in Colab
+import numpy as np
+from scipy import stats
+
+# Remove outlier (extreme values)
+z_scores = stats.zscore(df["PM2.5"])
+df_filtered = df_season[np.abs(z_scores) <= 3]  # Mean ± 3σ
+
+import plotly.express as px
+import pandas as pd
+import plotly.io as pio
+pio.renderers.default = "colab"
+
+# Extract 'hour' from datetime index
+df_filtered["hour"] = df_filtered.index.hour
+
+# Select the item for visualziation
+pollutant = "PM2.5"
+color_range = [
+    df_filtered[pollutant].min(),
+    df_filtered[pollutant].max()]
+
+df_map = df_filtered[df_filtered["PM2.5"] >= 0].copy()
+
+# Visualization: Plotly
+fig = px.scatter_mapbox(
+    df_map,
+    lat="Latitude",
+    lon="Longitude",
+    color="PM2.5",
+    size="PM2.5",
+    size_max=40,
+    zoom=10,
+    animation_frame="hour",
+    range_color=[df_map["PM2.5"].min(), df_map["PM2.5"].max()],
+    color_continuous_scale=px.colors.sequential.Viridis,
+    title="Hourly PM2.5 Concentrations by Station",
+    opacity=0.7)
+
+fig.update_layout(margin={"r":0, "t":40, "l":0, "b":0})
+fig.show()
+
+
+
+from scipy import stats
+
+# Remove extreme values
+z_scores = stats.zscore(df["PM2.5"])
+df_filtered = df[np.abs(z_scores) <= 3]  # within mean ± 3σ
+df_filtered_over = df[np.abs(z_scores) > 3]  # Extreme values: out of mean ± 3σ
+
+# Mean and standard deviation: within mean ± 3σ
+mean = df_filtered["PM2.5"].mean()
+std = df_filtered["PM2.5"].std()
+
+# Mean and standard deviation: out of mean ± 3σ
+mean_over = df_filtered_over["PM2.5"].mean()
+std_over = df_filtered_over["PM2.5"].std()
+
+print("Original data size:", len(df), "Filtered data size [|Z| ≤ 3]:", len(df_filtered))
+print("Excluded data size [Z>3]:", len(df) - len(df_filtered))
+print("Mean [|Z| ≤ 3]:", mean,"SD [|Z| ≤ 3]:", std)
+print("Mean [|Z| > 3]:", mean_over,"SD [|Z| > 3]:", std_over)
+
+# Visualization
+fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharex=True, sharey=True)
+
+# Left: df (Original)
+axes[0].scatter(df["precipitation"], df["PM2.5"], alpha=0.3, color='gray')
+axes[0].set_title("Original PM2.5 vs Precipitation")
+axes[0].set_xlabel("Precipitation (mm)")
+axes[0].set_ylabel("PM2.5 (μg/m³)")
+axes[0].grid(True)
+
+# Right: df_filtered (Z-score filtered)
+axes[1].scatter(df_filtered["precipitation"], df_filtered["PM2.5"], alpha=0.3, color='blue')
+axes[1].set_title("Filtered PM2.5 (|Z| ≤ 3) vs Precipitation")
+axes[1].set_xlabel("Precipitation (mm)")
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# OLS, Ridge and Lasso regression models for all data points
+import statsmodels.api as sm
+
+# Target variable
+target = "PM2.5"
+
+features = ["SO2", "NO2", "O3", "CO", "PM10",
+    "temperature_2m", "relative_humidity_2m",
+    "windspeed_10m", "winddirection_10m",
+    "precipitation", "cloudcover", "shortwave_radiation"]
+
+# Dataframe for analysis
+df_partial = df_season.copy()
+# df_partial =
+df_model = df_partial[[target] + features].dropna()
+
+# X, y
+X = df_model[features]
+y = df_model[target]
+
+# Add a constant
+X = sm.add_constant(X)
+
+# OLS regression model
+model = sm.OLS(y, X).fit()
+print(model.summary())
+
+
+# Variance Inflation Factor (VIF)
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+vif = pd.DataFrame()
+vif["feature"] = X.columns
+vif["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+print(vif)
+
+
+# Ridge and Lasso regression
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import RidgeCV, LassoCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import r2_score, mean_squared_error
+
+# X, y
+X = df_model[features]
+y = df_model[target]
+
+# Split into train/validation
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
+# Training regularizaed regression model
+alphas = np.logspace(-3, 3, 50)
+ridge = make_pipeline(StandardScaler(), RidgeCV(alphas=alphas, cv=5))
+lasso = make_pipeline(StandardScaler(), LassoCV(alphas=alphas, cv=5, max_iter=10000))
+
+ridge.fit(X_train, y_train)
+lasso.fit(X_train, y_train)
+
+ridge_coef = ridge.named_steps["ridgecv"].coef_
+lasso_coef = lasso.named_steps["lassocv"].coef_
+
+coef_df = pd.DataFrame({
+    "Feature": features,
+    "Ridge Coef": ridge_coef,
+    "Lasso Coef": lasso_coef
+}).sort_values("Ridge Coef", key=abs, ascending=False).reset_index(drop=True)
+
+# Prediction
+y_pred_ridge = ridge.predict(X_val)
+y_pred_lasso = lasso.predict(X_val)
+
+print("Ridge Regression")
+print(f"R² Score: {r2_score(y_val, y_pred_ridge):.4f}")
+print(f"MSE: {mean_squared_error(y_val, y_pred_ridge):.2f}")
+
+print("Lasso Regression")
+print(f"R² Score: {r2_score(y_val, y_pred_lasso):.4f}")
+print(f"MSE: {mean_squared_error(y_val, y_pred_lasso):.2f}")
+
+
+
+
+
+# OLS, Ridge and Lasso regression models for seasonal dataset
+# Target variable
+target = "PM2.5"
+
+features = ["SO2", "NO2", "O3", "CO", "PM10",
+    "temperature_2m", "relative_humidity_2m",
+    "windspeed_10m", "winddirection_10m",
+    "precipitation", "cloudcover", "shortwave_radiation"]
+
+
+df_model_time = df_model.copy()
+df_model_time["month"] = df_model_time.index.month
+
+season_dict = {
+    "Spring": [3, 4, 5],
+    "Summer": [6, 7, 8],
+    "Fall": [9, 10, 11],
+    "Winter": [12, 1, 2]
+}
+
+seasonal_results = []
+for season, months in season_dict.items():
+
+  print(season, months)
+
+  # Seasonal dataset
+  df_sub = df_model_time[df_model_time["month"].isin(months)]
+
+  # # X, y
+  # X = df_sub[features]
+  # y = df_sub[target]
+
+  # # Add a constant
+  # X = sm.add_constant(X)
+
+  # # OLS regression model
+  # model = sm.OLS(y, X).fit()
+  # print(model.summary())
+
+  # X, y
+  X = df_sub[features]
+  y = df_sub[target]
+
+  # Split into train/validation
+  X_train, X_val, y_train, y_val = train_test_split(
+      X, y, test_size=0.2, random_state=42)
+
+  # Training Ridge/Lasso regression models
+  alphas = np.logspace(-3, 3, 50)
+  ridge = make_pipeline(StandardScaler(), RidgeCV(alphas=alphas, cv=5))
+  lasso = make_pipeline(StandardScaler(), LassoCV(alphas=alphas, cv=5, max_iter=10000))
+
+  ridge.fit(X_train, y_train)
+  lasso.fit(X_train, y_train)
+
+  ridge_coef = ridge.named_steps["ridgecv"].coef_
+  lasso_coef = lasso.named_steps["lassocv"].coef_
+
+  coef_df = pd.DataFrame({
+      "Feature": features,
+      "Ridge Coef": ridge_coef,
+      "Lasso Coef": lasso_coef
+  }).sort_values("Ridge Coef", key=abs, ascending=False).reset_index(drop=True)
+
+  # Prediction
+  y_pred_ridge = ridge.predict(X_val)
+  y_pred_lasso = lasso.predict(X_val)
+
+  print("Ridge Regression")
+  print(f"R² Score: {r2_score(y_val, y_pred_ridge):.4f}")
+  print(f"MSE: {mean_squared_error(y_val, y_pred_ridge):.2f}")
+
+  print("Lasso Regression")
+  print(f"R² Score: {r2_score(y_val, y_pred_lasso):.4f}")
+  print(f"MSE: {mean_squared_error(y_val, y_pred_lasso):.2f}")
+
+
+
+# OLS, Ridge, Lasso regression results: the max R²is below 0.16.
+# ( R²) Spring: 0.154 / Summer: 0.043 / Fall: 0.061 / Winter: 0.125
+# Negative relationship with PM2.5: Windspeed, Precipitation, Temperature
+# Windspeed and Precipitation(spring, fall, winter) / Temperature (all seasons)
+# NO₂and CO: Positive association with PM2.5
+
+
+# Ridge and Lasso regression: Ridge and Lasso perform nearly identical across all seasons.
+# Spring R²and MSE: 0.0990 and 2530
+# Summer R²and MSE: 0.0466 and 2471
+# Fall   R²and MSE: 0.0702 and 1693
+# Winter R²and MSE: 0.1528 and 1412 (Most predictable season)
+
+
+
+##
+
+
